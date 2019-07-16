@@ -1,11 +1,16 @@
 package main
 
 import (
+	"bufio"
+	"encoding/csv"
+	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 )
 
 // csvPath is a string to hold the path to directory containing CSV files
@@ -14,7 +19,11 @@ var csvPath string
 // codes is the map that will store all valid codes.
 var codes map[string]bool
 
+// Lock the map for reading/writing
+var lock = sync.RWMutex{}
+
 func main() {
+	codes = make(map[string]bool)
 
 	// Set `csvPath` to the arg provided on app startup
 	flag.StringVar(&csvPath, "dir", "./csv-files", "The directory in which to look for CSV files")
@@ -23,7 +32,7 @@ func main() {
 	fmt.Printf("Dir: %+q\n", csvPath)
 	files := getCsvFiles(csvPath)
 
-	fmt.Println(checkFilesForDuplicateCodes(files))
+	checkFilesForDuplicateCodes(files)
 }
 
 func checkFilesForDuplicateCodes(files []string) error {
@@ -38,14 +47,29 @@ func checkFilesForDuplicateCodes(files []string) error {
 
 			// Handle file processing here, if you find a duplicate code emit an error on the errc channel
 			// otherwise emit nil on done
-
-			ch := done
-
-			select {
-			case ch <- nil:
+			file, err := os.Open(filename)
+			if err != nil {
+				errc <- err
 				return
-			case <-quit:
-				return
+			}
+
+			reader := csv.NewReader(bufio.NewReader(file))
+			for {
+				line, err := reader.Read()
+				if err == io.EOF {
+					done <- nil
+					return
+				} else if err != nil {
+					errc <- err
+					return
+				}
+
+				err = check(line[1])
+
+				if err != nil {
+					errc <- fmt.Errorf("Duplicate code found in: %s", filename)
+					return
+				}
 			}
 		}(f)
 	}
@@ -55,6 +79,7 @@ func checkFilesForDuplicateCodes(files []string) error {
 	for {
 		select {
 		case err := <-errc:
+			fmt.Errorf("Error found: %s", err)
 			close(quit)
 			return err
 		case <-done:
@@ -68,9 +93,19 @@ func checkFilesForDuplicateCodes(files []string) error {
 }
 
 // check for the code alread existing in the codes map
-func check(code string) bool {
+func check(code string) error {
+	lock.RLock()
 	_, exists := codes[code]
-	return exists
+	lock.RUnlock()
+
+	if exists {
+		return errors.New("Duplicate key found")
+	} else {
+		lock.Lock()
+		codes[code] = false
+		lock.Unlock()
+	}
+	return nil
 }
 
 // getCsvFiles returns a slice of strings holding the filenames of all of the csv files
