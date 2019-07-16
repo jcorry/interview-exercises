@@ -21,14 +21,15 @@ import (
 var csvPath string
 
 // codes is the map that will store all valid codes.
-var codes map[string]bool
+var codes sync.Map
+
+var codeCount int
 
 // Lock the map for reading/writing
 var lock = sync.RWMutex{}
 
 func main() {
-	codes = make(map[string]bool)
-
+	codeCount = 0
 	// Set `csvPath` to the arg provided on app startup
 	flag.StringVar(&csvPath, "dir", "./csv-files", "The directory in which to look for CSV files")
 	flag.Parse()
@@ -40,7 +41,13 @@ func main() {
 
 	ctx, _ := context.WithTimeout(context.Background(), duration)
 
-	fmt.Println(checkFilesForDuplicateCodes(ctx, files))
+	err := checkFilesForDuplicateCodes(ctx, files)
+
+	if err == io.EOF {
+		fmt.Println(fmt.Sprintf("We completed the scan with %d unique codes", codeCount))
+	} else {
+		fmt.Println(err)
+	}
 }
 
 func checkFilesForDuplicateCodes(ctx context.Context, filenames []string) error {
@@ -94,16 +101,17 @@ func check(code string) error {
 	if code == "code" {
 		return nil
 	}
-	lock.RLock()
-	_, exists := codes[code]
-	lock.RUnlock()
+
+	_, exists := codes.Load(code)
 
 	if exists {
 		return errors.New("Duplicate key found")
 	}
 
+	codes.Store(code, code)
+
 	lock.Lock()
-	codes[code] = false
+	codeCount++
 	lock.Unlock()
 
 	return nil
