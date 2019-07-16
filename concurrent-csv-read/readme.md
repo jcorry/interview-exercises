@@ -14,11 +14,11 @@ I think we can rely on maps in Go having unique keys to help solve the problem. 
 
 Update: Using a sync.Map for this is a little cleaner and gets rid of the mutex locking/unlocking.
 
-~~### Channels to hold state between goroutines [^1]
+~~### Channels to hold state between goroutines [^1]~~
 
-`chan bool` `quit`. Written to when neither `done` or `errc` get input, signifies there's nothing left to do because all rows of all files have been processed.
-`chan error` `done`. Each time this receives increment a counter. When the counter value is the same as the number of files we're all done.
-`chan error` `errc`. This channel gets an err when the map is found to already contain a key. When its listener reads a value ~~
+~~`chan bool` `quit`. Written to when neither `done` or `errc` get input, signifies there's nothing left to do because all rows of all files have been processed.~~
+~~`chan error` `done`. Each time this receives increment a counter. When the counter value is the same as the number of files we're all done.~~
+~~`chan error` `errc`. This channel gets an err when the map is found to already contain a key. When its listener reads a value~~
 
 Channels were a little unwieldy and ultimately not the best tool.
 
