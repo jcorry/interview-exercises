@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/csv"
 	"errors"
 	"flag"
@@ -11,20 +12,24 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
+
+	"golang.org/x/sync/errgroup"
 )
 
 // csvPath is a string to hold the path to directory containing CSV files
 var csvPath string
 
 // codes is the map that will store all valid codes.
-var codes map[string]bool
+var codes sync.Map
+
+var codeCount int
 
 // Lock the map for reading/writing
 var lock = sync.RWMutex{}
 
 func main() {
-	codes = make(map[string]bool)
-
+	codeCount = 0
 	// Set `csvPath` to the arg provided on app startup
 	flag.StringVar(&csvPath, "dir", "./csv-files", "The directory in which to look for CSV files")
 	flag.Parse()
@@ -32,79 +37,83 @@ func main() {
 	fmt.Printf("Dir: %+q\n", csvPath)
 	files := getCsvFiles(csvPath)
 
-	checkFilesForDuplicateCodes(files)
+	duration := time.Duration(500 * time.Millisecond)
+
+	ctx, _ := context.WithTimeout(context.Background(), duration)
+
+	err := checkFilesForDuplicateCodes(ctx, files)
+
+	if err == io.EOF {
+		fmt.Println(fmt.Sprintf("We completed the scan with %d unique codes", codeCount))
+	} else {
+		fmt.Println(err)
+	}
 }
 
-func checkFilesForDuplicateCodes(files []string) error {
-	// Channels for goroutine control
-	quit := make(chan bool)
-	errc := make(chan error)
-	done := make(chan error)
+func checkFilesForDuplicateCodes(ctx context.Context, filenames []string) error {
+	g, ctx := errgroup.WithContext(ctx)
 
-	for _, f := range files {
-		go func(filename string) {
-			fmt.Println(fmt.Sprintf("Processing CSV file: %s", filename))
+	for _, f := range filenames {
+		f := f
+		g.Go(func() error {
+			fmt.Println(fmt.Sprintf("Processing CSV file: %s", f))
 
 			// Handle file processing here, if you find a duplicate code emit an error on the errc channel
 			// otherwise emit nil on done
-			file, err := os.Open(filename)
+			file, err := os.Open(f)
 			if err != nil {
-				errc <- err
-				return
+				return err
 			}
+			defer file.Close()
 
 			reader := csv.NewReader(bufio.NewReader(file))
+			lineNum := 1
 			for {
 				line, err := reader.Read()
 				if err == io.EOF {
-					done <- nil
-					return
+					return err
 				} else if err != nil {
-					errc <- err
-					return
+					return err
 				}
 
 				err = check(line[1])
 
 				if err != nil {
-					errc <- fmt.Errorf("Duplicate code found in: %s", filename)
-					return
+					return fmt.Errorf("Duplicate code found on line %d of : %s", lineNum, f)
 				}
+				lineNum++
 			}
-		}(f)
-	}
 
-	count := 0
-
-	for {
-		select {
-		case err := <-errc:
-			fmt.Errorf("Error found: %s", err)
-			close(quit)
-			return err
-		case <-done:
-			count++
-			if count == len(files) {
-				fmt.Println("Done, no duplicates found")
-				return nil
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
 			}
-		}
+			return nil
+
+		})
 	}
+	return g.Wait()
 }
 
 // check for the code alread existing in the codes map
 func check(code string) error {
-	lock.RLock()
-	_, exists := codes[code]
-	lock.RUnlock()
+	// Don't check header rows
+	if code == "code" {
+		return nil
+	}
+
+	_, exists := codes.Load(code)
 
 	if exists {
 		return errors.New("Duplicate key found")
-	} else {
-		lock.Lock()
-		codes[code] = false
-		lock.Unlock()
 	}
+
+	codes.Store(code, code)
+
+	lock.Lock()
+	codeCount++
+	lock.Unlock()
+
 	return nil
 }
 
